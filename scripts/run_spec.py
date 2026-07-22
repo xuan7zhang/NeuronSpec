@@ -16,14 +16,19 @@ import argparse
 import json
 import time
 
+import sys
+import types
+
 import torch
-import transformers
 from transformers import AutoTokenizer, GenerationConfig
 
 # Shim: the DLC ships transformers 4.48 (no Qwen3), but NxDI's utils/constants
-# imports Qwen3ForCausalLM at module level. Alias it so benchmark utils import.
-if not hasattr(transformers, "Qwen3ForCausalLM"):
-    transformers.Qwen3ForCausalLM = transformers.LlamaForCausalLM
+# imports NeuronQwen3ForCausalLM at module level, which then fails on
+# `from transformers import Qwen3ForCausalLM`. Pre-seed a stub module so the
+# import never happens (we only use llama).
+_qwen3_stub = types.ModuleType("neuronx_distributed_inference.models.qwen3.modeling_qwen3")
+_qwen3_stub.NeuronQwen3ForCausalLM = None
+sys.modules["neuronx_distributed_inference.models.qwen3.modeling_qwen3"] = _qwen3_stub
 
 from neuronx_distributed_inference.models.llama.modeling_llama import NeuronLlamaForCausalLM
 from neuronx_distributed_inference.utils.hf_adapter import HuggingFaceGenerationAdapter
