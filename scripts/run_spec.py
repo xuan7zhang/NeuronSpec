@@ -81,28 +81,37 @@ def main():
     generation_config.max_new_tokens = max_new
 
     # ---- generation (correctness eyeball check) ----
+    # HF's generate() refuses assisted decoding with batch>1 — the exact
+    # batch-size-1 limitation of the official speculation path. For those
+    # traces we can only benchmark raw forwards (benchmark_sampling).
+    skip_generate = nc.enable_fused_speculation and nc.batch_size > 1
+    dt, new_tokens = None, None
+    if skip_generate:
+        print("\nNOTE: fused spec with batch>1 — HF assisted generate unsupported, "
+              "skipping generation, benchmark only")
     prompts = args.prompts or ["I believe the meaning of life is"]
     # replicate prompts to fill the compiled batch size
     prompts = (prompts * nc.batch_size)[: nc.batch_size]
     gen_model = HuggingFaceGenerationAdapter(model)
     inputs = tokenizer(prompts, return_tensors="pt", padding=True)
 
-    gen_kwargs = {}
-    if nc.enable_fused_speculation:
-        # Triggers the adapter's _fused_assisted_decoding path (see NxDI utils/accuracy.py)
-        gen_kwargs["prompt_lookup_num_tokens"] = nc.speculation_length
+    if not skip_generate:
+        gen_kwargs = {}
+        if nc.enable_fused_speculation:
+            # Triggers the adapter's _fused_assisted_decoding path (see NxDI utils/accuracy.py)
+            gen_kwargs["prompt_lookup_num_tokens"] = nc.speculation_length
 
-    t0 = time.monotonic()
-    outputs = gen_model.generate(
-        inputs.input_ids, attention_mask=inputs.attention_mask,
-        generation_config=generation_config, **gen_kwargs,
-    )
-    dt = time.monotonic() - t0
-    new_tokens = int((outputs.shape[1] - inputs.input_ids.shape[1]) * outputs.shape[0])
-    print(f"\ngenerate: {dt*1000:.1f} ms, {new_tokens} new tokens, "
-          f"{new_tokens/dt:.1f} tok/s (batch={outputs.shape[0]})")
-    for i, text in enumerate(tokenizer.batch_decode(outputs, skip_special_tokens=True)):
-        print(f"--- output[{i}] ---\n{text}")
+        t0 = time.monotonic()
+        outputs = gen_model.generate(
+            inputs.input_ids, attention_mask=inputs.attention_mask,
+            generation_config=generation_config, **gen_kwargs,
+        )
+        dt = time.monotonic() - t0
+        new_tokens = int((outputs.shape[1] - inputs.input_ids.shape[1]) * outputs.shape[0])
+        print(f"\ngenerate: {dt*1000:.1f} ms, {new_tokens} new tokens, "
+              f"{new_tokens/dt:.1f} tok/s (batch={outputs.shape[0]})")
+        for i, text in enumerate(tokenizer.batch_decode(outputs, skip_special_tokens=True)):
+            print(f"--- output[{i}] ---\n{text}")
 
     # ---- benchmark ----
     report = None
@@ -121,9 +130,10 @@ def main():
             "speculation_length": nc.speculation_length,
             "fused_spec": nc.enable_fused_speculation,
             "tp_degree": nc.tp_degree,
-            "generate_ms": dt * 1000,
+            "generate_ms": dt * 1000 if dt else None,
             "new_tokens": new_tokens,
-            "tok_per_s": new_tokens / dt,
+            "tok_per_s": new_tokens / dt if dt else None,
+            "hf_generate_supported": not skip_generate,
             "benchmark": report,
         }
         with open(args.json_out, "w") as f:
