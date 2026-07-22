@@ -35,6 +35,77 @@ from neuronx_distributed_inference.utils.hf_adapter import HuggingFaceGeneration
 from neuronx_distributed_inference.utils.random import set_random_seed
 
 
+def raw_submodule_benchmark(model, generation_config, num_runs=20):
+    """Benchmark per-forward latency of each compiled submodule directly.
+
+    Used for fused-spec batch>1 traces where the HF generate e2e path is
+    unavailable. Reports ms per forward for context encoding and the fused
+    speculation step (draft+verify+accept on device).
+    """
+    from neuronx_distributed_inference.utils.benchmark import (
+        Benchmark, get_sample_inputs, generate_report,
+        CONTEXT_ENCODING_MODEL, TOKEN_GENERATION_MODEL, SPECULATION_MODEL,
+    )
+    from neuronx_distributed_inference.modules.generation.sampling import prepare_sampling_params
+
+    nc = model.config.neuron_config
+    sampling_params = prepare_sampling_params(
+        batch_size=nc.batch_size,
+        top_k=generation_config.top_k,
+        top_p=generation_config.top_p,
+        temperature=generation_config.temperature,
+    )
+
+    submodules = {n: getattr(model, n) for n in dir(model)
+                  if n.endswith("_model") and getattr(model, n, None) is not None}
+    print(f"submodules found: {list(submodules)}")
+
+    bs = nc.batch_size
+
+    def fused_step_inputs(mask_len):
+        # The fused speculation graph takes a SINGLE current token per request
+        # (draft + verify + accept all happen on device); registered input
+        # shapes are ids (b,1), mask (b,{128,256}), pos (b,1).
+        return (
+            torch.zeros((bs, 1), dtype=torch.int32),
+            torch.zeros((bs, mask_len), dtype=torch.int32),
+            torch.zeros((bs, 1), dtype=torch.int32),
+            torch.zeros((bs,), dtype=torch.int32),
+            sampling_params, None, None,
+        )
+
+    report = {}
+    plans = []
+    if "context_encoding_model" in submodules:
+        ctx_inputs = tuple(get_sample_inputs(
+            CONTEXT_ENCODING_MODEL, model.config, sampling_params)) + (None, None)
+        plans.append(("context_encoding_model", ctx_inputs))
+    if "token_generation_model" in submodules:
+        tkg_inputs = tuple(get_sample_inputs(
+            TOKEN_GENERATION_MODEL, model.config, sampling_params)) + (None, None)
+        plans.append(("token_generation_model", tkg_inputs))
+    if "fused_spec_model" in submodules:
+        buckets = getattr(submodules["fused_spec_model"].neuron_config, "buckets", None) or [nc.seq_len]
+        for b_len in buckets:
+            # mask length below the bucket limit routes into that bucket
+            mask_len = b_len if b_len < max(buckets) else b_len - nc.speculation_length
+            plans.append((f"fused_spec_model@kv{b_len}", fused_step_inputs(mask_len)))
+
+    for label, input_param in plans:
+        attr = label.split("@")[0]
+        sub = submodules[attr]
+        try:
+            bench = Benchmark(sub, input_param, num_runs=num_runs)
+            bench.run()
+            report[label] = generate_report(
+                bench.latency_list, nc.max_length, nc.max_batch_size,
+                n_runs=bench.num_runs,
+            )
+        except Exception as e:
+            report[label] = {"error": f"{type(e).__name__}: {e}"}
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiled-model-path", required=True)
@@ -118,7 +189,12 @@ def main():
     if args.benchmark:
         from neuronx_distributed_inference.utils.benchmark import benchmark_sampling
         print("\nBenchmarking...")
-        report = benchmark_sampling(model, None, generation_config)
+        if skip_generate:
+            # e2e goes through HF generate (batch-1 only for assisted decoding),
+            # so benchmark raw submodule forwards instead.
+            report = raw_submodule_benchmark(model, generation_config)
+        else:
+            report = benchmark_sampling(model, None, generation_config)
         print(json.dumps(report, indent=2, default=str))
 
     if args.json_out:
