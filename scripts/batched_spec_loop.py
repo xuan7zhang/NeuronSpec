@@ -361,6 +361,8 @@ def main():
     p.add_argument("--spec-json", default=None, help="compare mode: spec results file")
     p.add_argument("--ar-json", default=None, help="compare mode: AR reference file")
     p.add_argument("--loop", choices=["v1", "v2"], default="v1")
+    p.add_argument("--queue-indices", default=None,
+                   help="refill mode: comma-separated REFILL_QUEUE indices to serve")
     args = p.parse_args()
 
     set_random_seed(0)
@@ -398,8 +400,12 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(mp, padding_side="right")
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
-        print("== continuous-batching refill loop ==")
-        res = refill_generate(spec_model, tokenizer, REFILL_QUEUE, args.max_new)
+        queue = REFILL_QUEUE
+        if args.queue_indices:
+            idx = [int(i) for i in args.queue_indices.split(",")]
+            queue = [REFILL_QUEUE[i] for i in idx]
+        print(f"== continuous-batching refill loop ({len(queue)} reqs) ==")
+        res = refill_generate(spec_model, tokenizer, queue, args.max_new)
         print(f"requests={res['requests']} tokens={res['total_new_tokens']} "
               f"wall={res['wall_ms']}ms agg={res['agg_tok_per_s']} tok/s")
         print(f"rounds={res['rounds']} fwd={res['mean_fwd_ms']}ms "
