@@ -259,22 +259,22 @@ def refill_generate(model, tokenizer, queue, max_new):
         enc = tokenizer([queue[req_idx]], return_tensors="pt")
         L = enc.input_ids.shape[1]
         t0 = time.perf_counter()
-        out = model.forward(
-            input_ids=enc.input_ids,
-            attention_mask=enc.attention_mask,
-            position_ids=torch.arange(L).unsqueeze(0),
-            seq_ids=torch.tensor([slot], dtype=torch.int32),
-            sampling_params=sampling_1,
-        )
+        # call the submodule directly: app-level routing (_is_prefill checks
+        # position_ids.min()==0) misroutes mixed batches
+        out = model.context_encoding_model(
+            enc.input_ids.to(torch.int32), enc.attention_mask.to(torch.int32),
+            torch.arange(L).unsqueeze(0).to(torch.int32),
+            torch.tensor([slot], dtype=torch.int32),
+            sampling_1, None, None)
         dt = (time.perf_counter() - t0) * 1000
         ctx_calls += 1
         ctx_ms_total += dt
-        first = int(out.fused_outputs[0][0, 0])
+        first = int(out[0][0, 0])
         slot_req[slot] = req_idx
         slot_tokens[slot] = [first]
         valid[slot] = L
-        cur_input[slot, 0] = out.fused_outputs[1][0, 0]
-        cur_pos[slot, 0] = out.fused_outputs[3][0, 0]
+        cur_input[slot, 0] = out[1][0, 0]
+        cur_pos[slot, 0] = out[3][0, 0]
         req_t0[slot] = t0
         return dt
 
@@ -287,20 +287,17 @@ def refill_generate(model, tokenizer, queue, max_new):
     while any(r >= 0 for r in slot_req):
         mask = (positions_row < valid.unsqueeze(1)).to(torch.int32)
         t0 = time.perf_counter()
-        out = model.forward(
-            input_ids=cur_input,
-            attention_mask=mask,
-            position_ids=cur_pos,
-            seq_ids=torch.arange(bs, dtype=torch.int32),
-            sampling_params=sampling_b,
-        )
+        out = model.fused_spec_model(
+            cur_input, mask, cur_pos,
+            torch.arange(bs, dtype=torch.int32),
+            sampling_b, None, None)
         fwd_ms_total += (time.perf_counter() - t0) * 1000
         rounds += 1
 
-        accepted = out.fused_outputs[0].to(torch.int64)
-        n = (out.fused_outputs[3] - cur_pos).view(-1).to(torch.int64)
-        cur_input = out.fused_outputs[1].clone()
-        cur_pos = out.fused_outputs[3].clone()
+        accepted = out[0].to(torch.int64)
+        n = (out[3] - cur_pos).view(-1).to(torch.int64)
+        cur_input = out[1].clone()
+        cur_pos = out[3].clone()
 
         for s in range(bs):
             if slot_req[s] < 0:
