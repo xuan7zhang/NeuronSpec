@@ -17,7 +17,13 @@ import json
 import time
 
 import torch
+import transformers
 from transformers import AutoTokenizer, GenerationConfig
+
+# Shim: the DLC ships transformers 4.48 (no Qwen3), but NxDI's utils/constants
+# imports Qwen3ForCausalLM at module level. Alias it so benchmark utils import.
+if not hasattr(transformers, "Qwen3ForCausalLM"):
+    transformers.Qwen3ForCausalLM = transformers.LlamaForCausalLM
 
 from neuronx_distributed_inference.models.llama.modeling_llama import NeuronLlamaForCausalLM
 from neuronx_distributed_inference.utils.hf_adapter import HuggingFaceGenerationAdapter
@@ -33,6 +39,7 @@ def main():
     parser.add_argument("--benchmark", action="store_true")
     parser.add_argument("--max-new-tokens", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--json-out", default=None, help="write results as JSON to this path")
     args = parser.parse_args()
 
     set_random_seed(args.seed)
@@ -57,7 +64,7 @@ def main():
     model.load(compiled)
     print(f"load time: {time.monotonic() - t0:.1f}s")
 
-    tokenizer = AutoTokenizer.from_pretrained(compiled, padding_side="right")
+    tokenizer = AutoTokenizer.from_pretrained(model_path, padding_side="right")
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = 2
 
@@ -75,10 +82,15 @@ def main():
     gen_model = HuggingFaceGenerationAdapter(model)
     inputs = tokenizer(prompts, return_tensors="pt", padding=True)
 
+    gen_kwargs = {}
+    if nc.enable_fused_speculation:
+        # Triggers the adapter's _fused_assisted_decoding path (see NxDI utils/accuracy.py)
+        gen_kwargs["prompt_lookup_num_tokens"] = nc.speculation_length
+
     t0 = time.monotonic()
     outputs = gen_model.generate(
         inputs.input_ids, attention_mask=inputs.attention_mask,
-        generation_config=generation_config,
+        generation_config=generation_config, **gen_kwargs,
     )
     dt = time.monotonic() - t0
     new_tokens = int((outputs.shape[1] - inputs.input_ids.shape[1]) * outputs.shape[0])
@@ -88,11 +100,30 @@ def main():
         print(f"--- output[{i}] ---\n{text}")
 
     # ---- benchmark ----
+    report = None
     if args.benchmark:
         from neuronx_distributed_inference.utils.benchmark import benchmark_sampling
         print("\nBenchmarking...")
         report = benchmark_sampling(model, None, generation_config)
         print(json.dumps(report, indent=2, default=str))
+
+    if args.json_out:
+        result = {
+            "trace": compiled,
+            "batch_size": nc.batch_size,
+            "max_context_length": nc.max_context_length,
+            "seq_len": nc.seq_len,
+            "speculation_length": nc.speculation_length,
+            "fused_spec": nc.enable_fused_speculation,
+            "tp_degree": nc.tp_degree,
+            "generate_ms": dt * 1000,
+            "new_tokens": new_tokens,
+            "tok_per_s": new_tokens / dt,
+            "benchmark": report,
+        }
+        with open(args.json_out, "w") as f:
+            json.dump(result, f, indent=2, default=str)
+        print(f"wrote {args.json_out}")
 
 
 if __name__ == "__main__":
