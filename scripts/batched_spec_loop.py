@@ -207,6 +207,142 @@ def batched_spec_generate_v2(model, adapter, tokenizer, prompts, max_new):
     }
 
 
+REFILL_QUEUE = [  # 12 requests cycling the workload spectrum
+    "I believe the meaning of life is",
+    "def fibonacci(n):\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n",
+    "Explain step by step how to make a cup of tea:\nStep 1:",
+    'Generate a JSON list of users: [{"name": "Alice", "age": 30},',
+    "Count from 1 to 100: 1, 2, 3, 4, 5, 6, 7, 8,",
+    "Write a short story about a dragon who is afraid of heights.",
+    "The three most important principles of good software design are:",
+    "SELECT name, age FROM users WHERE",
+    "Once upon a time in a small village by the sea,",
+    "The capital of France is Paris. The capital of Japan is",
+    "import numpy as np\n\ndef softmax(x):\n",
+    "To reverse a linked list, you first",
+]
+
+
+def refill_generate(model, tokenizer, queue, max_new):
+    """Continuous-batching fused speculation: freed slots are refilled from
+    the queue via single-slot context encoding (ctx_batch_size=1 trace)."""
+    nc = model.config.neuron_config
+    bs = nc.batch_size
+    spec_len = nc.speculation_length
+    mask_len = max(nc.seq_len - spec_len - 2, nc.max_context_length)
+    positions_row = torch.arange(mask_len)
+    sampling_1 = prepare_sampling_params(batch_size=1, top_k=[1], top_p=[1.0],
+                                         temperature=[1.0])
+    sampling_b = prepare_sampling_params(batch_size=bs, top_k=[1], top_p=[1.0],
+                                         temperature=[1.0])
+    eos_list = (model.config.eos_token_id if isinstance(model.config.eos_token_id, list)
+                else [model.config.eos_token_id])
+    eos = set(eos_list)
+
+    model.reset()
+    t_start = time.perf_counter()
+
+    # per-slot state
+    slot_req = [-1] * bs          # queue index served by slot
+    slot_tokens = [None] * bs     # committed token list of active request
+    valid = torch.zeros(bs, dtype=torch.int64)
+    cur_input = torch.zeros((bs, 1), dtype=torch.int32)
+    cur_pos = torch.zeros((bs, 1), dtype=torch.int32)
+    next_req = 0
+    done = []                     # (req_idx, tokens, ttft_ms, e2e_ms)
+    req_t0 = [0.0] * bs
+    ctx_calls = 0
+    ctx_ms_total = 0.0
+
+    def encode_into(slot, req_idx):
+        nonlocal next_req, ctx_calls, ctx_ms_total
+        enc = tokenizer([queue[req_idx]], return_tensors="pt")
+        L = enc.input_ids.shape[1]
+        t0 = time.perf_counter()
+        out = model.forward(
+            input_ids=enc.input_ids,
+            attention_mask=enc.attention_mask,
+            position_ids=torch.arange(L).unsqueeze(0),
+            seq_ids=torch.tensor([slot], dtype=torch.int32),
+            sampling_params=sampling_1,
+        )
+        dt = (time.perf_counter() - t0) * 1000
+        ctx_calls += 1
+        ctx_ms_total += dt
+        first = int(out.fused_outputs[0][0, 0])
+        slot_req[slot] = req_idx
+        slot_tokens[slot] = [first]
+        valid[slot] = L
+        cur_input[slot, 0] = out.fused_outputs[1][0, 0]
+        cur_pos[slot, 0] = out.fused_outputs[3][0, 0]
+        req_t0[slot] = t0
+        return dt
+
+    for s in range(min(bs, len(queue))):
+        encode_into(s, next_req)
+        next_req += 1
+
+    rounds = 0
+    fwd_ms_total = 0.0
+    while any(r >= 0 for r in slot_req):
+        mask = (positions_row < valid.unsqueeze(1)).to(torch.int32)
+        t0 = time.perf_counter()
+        out = model.forward(
+            input_ids=cur_input,
+            attention_mask=mask,
+            position_ids=cur_pos,
+            seq_ids=torch.arange(bs, dtype=torch.int32),
+            sampling_params=sampling_b,
+        )
+        fwd_ms_total += (time.perf_counter() - t0) * 1000
+        rounds += 1
+
+        accepted = out.fused_outputs[0].to(torch.int64)
+        n = (out.fused_outputs[3] - cur_pos).view(-1).to(torch.int64)
+        cur_input = out.fused_outputs[1].clone()
+        cur_pos = out.fused_outputs[3].clone()
+
+        for s in range(bs):
+            if slot_req[s] < 0:
+                continue
+            finished = False
+            for t in accepted[s, : int(n[s])].tolist():
+                slot_tokens[s].append(t)
+                if t in eos or len(slot_tokens[s]) >= max_new:
+                    finished = True
+                    break
+            valid[s] += int(n[s])
+            if finished:
+                e2e = (time.perf_counter() - req_t0[s]) * 1000
+                done.append((slot_req[s], slot_tokens[s], round(e2e, 1)))
+                slot_req[s] = -1
+                if next_req < len(queue):
+                    encode_into(s, next_req)
+                    next_req += 1
+                else:
+                    valid[s] = 1  # park the dead slot on a harmless state
+                    cur_pos[s, 0] = 0
+                    cur_input[s, 0] = 0
+
+    wall_ms = (time.perf_counter() - t_start) * 1000
+    total_tokens = sum(len(t) for _, t, _ in done)
+    return {
+        "requests": len(done),
+        "total_new_tokens": total_tokens,
+        "wall_ms": round(wall_ms, 1),
+        "agg_tok_per_s": round(total_tokens / (wall_ms / 1000), 1),
+        "rounds": rounds,
+        "mean_fwd_ms": round(fwd_ms_total / max(rounds, 1), 2),
+        "ctx_calls": ctx_calls,
+        "mean_ctx_ms": round(ctx_ms_total / max(ctx_calls, 1), 2),
+        "per_request": [
+            {"req": r, "tokens": len(t), "e2e_ms": e,
+             "text_preview": tokenizer.decode(t, skip_special_tokens=True)[:80]}
+            for r, t, e in sorted(done)],
+        "committed_tokens": [t for _, t, _ in sorted(done)],
+    }
+
+
 def ar_reference(model, adapter, tokenizer, prompt, max_new):
     """b=1 greedy AR reference output tokens."""
     enc = tokenizer([prompt], return_tensors="pt")
@@ -220,7 +356,7 @@ def ar_reference(model, adapter, tokenizer, prompt, max_new):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["spec", "ar", "compare"], default="spec")
+    p.add_argument("--mode", choices=["spec", "ar", "compare", "refill"], default="spec")
     p.add_argument("--spec-trace")
     p.add_argument("--ar-trace")
     p.add_argument("--max-new", type=int, default=96)
@@ -258,6 +394,25 @@ def main():
         if args.json_out:
             with open(args.json_out, "w") as f:
                 json.dump({"spec_trace": args.spec_trace, "batched": res}, f, indent=2)
+            print("wrote", args.json_out)
+
+    elif args.mode == "refill":
+        spec_model, mp = load(args.spec_trace.rstrip("/") + "/")
+        tokenizer = AutoTokenizer.from_pretrained(mp, padding_side="right")
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        print("== continuous-batching refill loop ==")
+        res = refill_generate(spec_model, tokenizer, REFILL_QUEUE, args.max_new)
+        print(f"requests={res['requests']} tokens={res['total_new_tokens']} "
+              f"wall={res['wall_ms']}ms agg={res['agg_tok_per_s']} tok/s")
+        print(f"rounds={res['rounds']} fwd={res['mean_fwd_ms']}ms "
+              f"ctx_calls={res['ctx_calls']} ctx={res['mean_ctx_ms']}ms")
+        for r in res["per_request"]:
+            print(f"req[{r['req']:2d}] {r['tokens']:3d} toks e2e={r['e2e_ms']:7.1f}ms "
+                  f"| {r['text_preview']!r}")
+        if args.json_out:
+            with open(args.json_out, "w") as f:
+                json.dump({"spec_trace": args.spec_trace, "refill": res}, f, indent=2)
             print("wrote", args.json_out)
 
     elif args.mode == "ar":
