@@ -120,6 +120,93 @@ def batched_spec_generate(model, adapter, tokenizer, prompts, max_new):
     }
 
 
+def batched_spec_generate_v2(model, adapter, tokenizer, prompts, max_new):
+    """Vectorized ragged loop: fixed-bucket mask, no per-token python work.
+
+    v1 costs per round: mask rebuild via python row loop, per-token int()
+    conversions, growing mask length (causes a bucket switch mid-run).
+    v2: preallocated arange-comparison mask pinned to the large KV bucket,
+    tensorized accept/EOS handling, per-round host/forward time split.
+    """
+    nc = model.config.neuron_config
+    bs = nc.batch_size
+    spec_len = nc.speculation_length
+    # pin to the largest KV bucket for every step: constant executable,
+    # constant latency (Phase-1: kv128 vs kv256 step latency ~equal)
+    mask_len = max(nc.seq_len - spec_len - 2, nc.max_context_length)
+
+    enc = tokenizer(prompts, return_tensors="pt", padding=True)
+    model.reset()
+    sampling_params = prepare_sampling_params(
+        batch_size=bs, top_k=[1], top_p=[1.0], temperature=[1.0])
+    kwargs = {"attention_mask": enc.attention_mask, "sampling_params": sampling_params}
+    model_inputs = adapter.prepare_inputs_for_generation(enc.input_ids, **kwargs)
+
+    t0 = time.perf_counter()
+    outputs = adapter(**model_inputs)
+    ctx_ms = (time.perf_counter() - t0) * 1000
+
+    eos_list = (model.config.eos_token_id if isinstance(model.config.eos_token_id, list)
+                else [model.config.eos_token_id])
+    eos_t = torch.tensor(eos_list, dtype=torch.int64)
+
+    committed_buf = torch.full((bs, max_new + spec_len), -1, dtype=torch.int64)
+    committed_buf[:, 0] = outputs.fused_outputs[0][:, 0]
+    lens = torch.ones(bs, dtype=torch.int64)
+    valid = enc.attention_mask.sum(dim=1).to(torch.int64)  # per-request KV len
+    alive = torch.ones(bs, dtype=torch.bool)
+    positions = torch.arange(mask_len)
+
+    rounds = []
+    while bool(alive.any()):  # per-request stopping lives in `alive`
+        t_host0 = time.perf_counter()
+        mask = (positions < valid.unsqueeze(1)).to(torch.int32)  # (bs, mask_len)
+        step_inputs = {
+            "input_ids": outputs.fused_outputs[1],
+            "attention_mask": mask,
+            "position_ids": outputs.fused_outputs[3],
+            "sampling_params": sampling_params,
+        }
+        t_fwd0 = time.perf_counter()
+        outputs = model.forward(**step_inputs)
+        t_fwd = time.perf_counter() - t_fwd0
+
+        accepted = outputs.fused_outputs[0].to(torch.int64)      # (bs, spec_len)
+        n = (outputs.fused_outputs[3] - step_inputs["position_ids"]).view(-1).to(torch.int64)
+
+        # accept-window mask: position j accepted iff j < n_i (and request alive)
+        win = torch.arange(spec_len).unsqueeze(0) < n.unsqueeze(1)  # (bs, spec_len)
+        win &= alive.unsqueeze(1)
+        # EOS: cut each row's window at first EOS (inclusive)
+        is_eos = (accepted.unsqueeze(-1) == eos_t).any(-1) & win
+        first_eos = torch.where(is_eos.any(1), is_eos.int().argmax(1),
+                                torch.full((bs,), spec_len))
+        win &= torch.arange(spec_len).unsqueeze(0) <= first_eos.unsqueeze(1)
+        n_eff = win.sum(1)
+
+        # scatter accepted tokens into per-request committed buffers
+        dest = lens.unsqueeze(1) + torch.arange(spec_len).unsqueeze(0)  # (bs, spec_len)
+        flat_rows = torch.arange(bs).unsqueeze(1).expand_as(dest)[win]
+        committed_buf[flat_rows, dest[win]] = accepted[win]
+        lens += n_eff
+        valid += n * alive.to(torch.int64)  # KV grows by device-side n for alive reqs
+        alive &= ~is_eos.any(1)
+        alive &= lens < max_new
+
+        t_total = time.perf_counter() - t_host0
+        rounds.append({"n_per_req": n.tolist(), "ms": round(t_total * 1000, 3),
+                       "fwd_ms": round(t_fwd * 1000, 3),
+                       "host_ms": round((t_total - t_fwd) * 1000, 3)})
+
+    committed = [committed_buf[i, : int(lens[i])].tolist() for i in range(bs)]
+    return {
+        "ctx_ms": round(ctx_ms, 2),
+        "rounds": rounds,
+        "committed_tokens": committed,
+        "texts": [tokenizer.decode(c, skip_special_tokens=True) for c in committed],
+    }
+
+
 def ar_reference(model, adapter, tokenizer, prompt, max_new):
     """b=1 greedy AR reference output tokens."""
     enc = tokenizer([prompt], return_tensors="pt")
@@ -140,6 +227,7 @@ def main():
     p.add_argument("--json-out", default=None)
     p.add_argument("--spec-json", default=None, help="compare mode: spec results file")
     p.add_argument("--ar-json", default=None, help="compare mode: AR reference file")
+    p.add_argument("--loop", choices=["v1", "v2"], default="v1")
     args = p.parse_args()
 
     set_random_seed(0)
@@ -153,14 +241,18 @@ def main():
             tokenizer.pad_token = tokenizer.eos_token
         spec_adapter = HuggingFaceGenerationAdapter(spec_model)
 
-        print("== batched fused-spec loop ==")
-        res = batched_spec_generate(spec_model, spec_adapter, tokenizer,
-                                    PROMPTS, args.max_new)
+        print(f"== batched fused-spec loop ({args.loop}) ==")
+        gen_fn = batched_spec_generate_v2 if args.loop == "v2" else batched_spec_generate
+        res = gen_fn(spec_model, spec_adapter, tokenizer, PROMPTS, args.max_new)
         n_rounds = len(res["rounds"])
         total_new = sum(len(c) for c in res["committed_tokens"])
         total_ms = res["ctx_ms"] + sum(r["ms"] for r in res["rounds"])
         print(f"rounds={n_rounds} new_tokens={total_new} "
               f"{total_new / (total_ms / 1000):.1f} tok/s (batch aggregate)")
+        if res["rounds"] and "fwd_ms" in res["rounds"][0]:
+            fwd = sum(r["fwd_ms"] for r in res["rounds"]) / n_rounds
+            host = sum(r["host_ms"] for r in res["rounds"]) / n_rounds
+            print(f"per-round: fwd={fwd:.2f}ms host={host:.2f}ms")
         for i, t in enumerate(res["texts"]):
             print(f"--- req[{i}] ({len(res['committed_tokens'][i])} toks) ---\n{t[:160]}")
         if args.json_out:
