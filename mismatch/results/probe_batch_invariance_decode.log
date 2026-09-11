@@ -1,0 +1,5 @@
+START 2026-09-11T23:05:39+00:00
+[timing] batch32 13.7s, one-by-one 47.5s, reversed 8.3s
+RESULT decode 批32 顺序反转 [槽位依赖]: token 序列相同 0/32; 相同序列上 logprob 逐位相同 0/0 (0.000%), max|Δ| 0.000e+00
+RESULT decode 批32 vs 批1   [batch-invariance]: token 序列相同 0/32; 相同序列上 logprob 逐位相同 0/0 (0.000%), max|Δ| 0.000e+00
+DONE 2026-09-11T23:11:25+00:00

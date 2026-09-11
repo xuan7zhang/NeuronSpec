@@ -1,0 +1,6 @@
+START 2026-09-11T23:00:07+00:00
+[timing] batch32 5.7s, one-by-one 0.6s, reversed 0.5s, batch32 again 0.7s
+RESULT A vs A2   (同样提交方式, 重跑)      [对照: 应完全相同]: top-256 集合不同的序列 0/32; 其余 logprob 逐位相同 8224/8224 (100.000%), max|Δ| 0.000e+00
+RESULT A vs B    (批 32  vs  批 1)        [batch-invariance]: top-256 集合不同的序列 0/32; 其余 logprob 逐位相同 8224/8224 (100.000%), max|Δ| 0.000e+00
+RESULT A vs C    (批 32, 顺序反转)         [槽位依赖]: top-256 集合不同的序列 0/32; 其余 logprob 逐位相同 8224/8224 (100.000%), max|Δ| 0.000e+00
+DONE 2026-09-11T23:04:53+00:00

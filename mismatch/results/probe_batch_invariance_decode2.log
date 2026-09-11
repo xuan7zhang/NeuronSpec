@@ -1,0 +1,8 @@
+START 2026-09-11T23:12:16+00:00
+--- 贪心 (temperature=0, 无 RNG): 前向路径的 batch-invariance ---
+[timing] batch32 7.3s
+RESULT 贪心 批32 顺序反转 [槽位依赖]: token 序列相同 32/32; 分叉前 logprob 逐位相同 2048/2048 (100.000%), max|Δ| 0.000e+00
+RESULT 贪心 批32 vs 批1   [batch-invariance]: token 序列相同 32/32; 分叉前 logprob 逐位相同 2048/2048 (100.000%), max|Δ| 0.000e+00
+--- 带 seed 的采样 (C.SAMPLING): 分叉是否来自 RNG ---
+RESULT 采样 批32 vs 批1: token 序列相同 0/32; 分叉前 logprob 逐位相同 18/18 (100.000%), max|Δ| 0.000e+00, 首次分叉位置 中位数 0 最小 0
+DONE 2026-09-11T23:18:36+00:00
