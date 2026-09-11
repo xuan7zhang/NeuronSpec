@@ -1,0 +1,52 @@
+2026-09-11 20:38:17.692789: W neuron/pjrt-api/neuronpjrt.cc:1781] Use PJRT C-API 0.79 as client did not specify a PJRT C-API version
+2026-Sep-11 20:38:24.0068 370460:370539 [0] int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t**):219 CCOM WARN NET/OFI Failed to initialize rdma protocol
+2026-Sep-11 20:38:24.0070 370460:370539 [0] int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t**):354 CCOM WARN NET/OFI aws-ofi-nccl initialization failed
+2026-Sep-11 20:38:24.0072 370460:370539 [0] ncclResult_t nccl_net_ofi_init_no_atexit_fini_v6(ncclDebugLogger_t):183 CCOM WARN NET/OFI Initializing plugin failed
+2026-Sep-11 20:38:24.0075 370460:370539 [0] net_plugin.cc:97 CCOM WARN OFI plugin initNet() failed is EFA enabled?
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 133.13it/s]
+.Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:38:26.000470:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_12002891029113244998+6fe2a109.hlo_module.pb
+/home/ec2-user/mismatch/tools/probe_cross_bucket.py:16: DeprecationWarning: Use torch_xla.sync instead
+  lp = R.forward_scalar(model, ids.to(dev), attn.to(dev)); xm.mark_step()
+.........Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:41:23.000402:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_187794569425428826+6fe2a109.hlo_module.pb
+.Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:41:25.000158:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_18109926727241767930+6fe2a109.hlo_module.pb
+2026-09-11 20:41:25.000169:  370460  [INFO]: Using a cached neff at /scratch/neuron-cache/train/neuronxcc-2.22.12471.0+b4a00d10/MODULE_18187035787153661065+6fe2a109/model.neff
+/home/ec2-user/mismatch/tools/probe_cross_bucket.py:16: DeprecationWarning: Use torch_xla.sync instead
+  lp = R.forward_scalar(model, ids.to(dev), attn.to(dev)); xm.mark_step()
+...........Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:44:55.000966:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_8685991702083121394+6fe2a109.hlo_module.pb
+.Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:44:57.000925:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_3889496365828297344+6fe2a109.hlo_module.pb
+.Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:44:59.000150:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_6765866157261382049+6fe2a109.hlo_module.pb
+/home/ec2-user/mismatch/tools/probe_cross_bucket.py:16: DeprecationWarning: Use torch_xla.sync instead
+  lp = R.forward_scalar(model, ids.to(dev), attn.to(dev)); xm.mark_step()
+...Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:45:54.000123:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_4789242948448019947+6fe2a109.hlo_module.pb
+.Completed run_backend_driver.
+
+Compiler status PASS
+2026-09-11 20:45:55.000629:  370460  [INFO]: Compilation Successfully Completed for model.MODULE_8537116490026079997+6fe2a109.hlo_module.pb
+/home/ec2-user/mismatch/tools/probe_cross_bucket.py:16: DeprecationWarning: Use torch_xla.sync instead
+  lp = R.forward_scalar(model, ids.to(dev), attn.to(dev)); xm.mark_step()
+[done] 10 seqs x 3 buckets in 454s
+RESULT bucket 512vs1024: bitwise equal 632/3990 (15.840%), max|Δ| 4.853e-01
+RESULT bucket 512vs2048: bitwise equal 652/3990 (16.341%), max|Δ| 3.979e-01
+RESULT bucket 1024vs2048: bitwise equal 683/3990 (17.118%), max|Δ| 4.839e-01

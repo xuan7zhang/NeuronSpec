@@ -1,0 +1,14 @@
+2026-09-11T20:38:11+00:00 ===== START =====
+2026-09-11T20:38:11+00:00 --- 分桶验证器可行性 ---
+[done] 10 seqs x 3 buckets in 454s
+RESULT bucket 512vs1024: bitwise equal 632/3990 (15.840%), max|Δ| 4.853e-01
+RESULT bucket 512vs2048: bitwise equal 652/3990 (16.341%), max|Δ| 3.979e-01
+RESULT bucket 1024vs2048: bitwise equal 683/3990 (17.118%), max|Δ| 4.839e-01
+2026-09-11T20:46:01+00:00 --- CTE 探针 (同前缀不同编译器) ---
+2026-09-11T20:46:01+00:00 START cte_probe_k1
+2026-09-11T20:50:59+00:00 END cte_probe_k1 rc=0 (8 NEFF)
+2026-09-11T20:50:59+00:00 START cte_probe_k64
+2026-09-11T20:52:44+00:00 END cte_probe_k64 rc=0 (0 NEFF)
+2026-09-11T20:52:44+00:00 START cte_probe_k256
+2026-09-11T20:54:31+00:00 END cte_probe_k256 rc=0 (0 NEFF)
+2026-09-11T20:54:31+00:00 ===== ALL DONE =====
