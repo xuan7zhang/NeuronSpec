@@ -1,0 +1,8 @@
+2026-09-09T21:01:43+00:00 fused test: RESULT scalar bitwise 6144/6144 (100.000%) max|Δ| 0.000e+00 | first-reject idx device==cpu 12/12 | row[token]==scalar 12/12 (rejections 12) | time first 218.9s steady 0.123s
+2026-09-09T21:01:43+00:00 fused graph bit-exact & idx consistent -> using --fused
+2026-09-09T21:01:43+00:00 START smoke_v2
+2026-09-09T21:09:23+00:00 END smoke_v2 rc=0
+2026-09-09T21:09:23+00:00 START tp2_C64_v2
+2026-09-09T21:36:14+00:00 END tp2_C64_v2 rc=0
+2026-09-09T21:36:14+00:00 START check
+2026-09-09T21:37:32+00:00 ALL_DONE
