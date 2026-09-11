@@ -1,0 +1,22 @@
+{
+  "n_sequences": 512,
+  "n_tokens": 262008,
+  "abs_diff_mean": 0.0,
+  "abs_diff_max": 0.0,
+  "abs_diff_p50": 0.0,
+  "abs_diff_p90": 0.0,
+  "abs_diff_p99": 0.0,
+  "abs_diff_p99.9": 0.0,
+  "ratio_mean": 1.0,
+  "ratio_std": 0.0,
+  "ratio_p50": 1.0,
+  "ratio_p90": 1.0,
+  "ratio_p99": 1.0,
+  "ratio_p99.9": 1.0,
+  "ratio_outside_tis_band": 0.0,
+  "seq_log_ratio_mean": 0.0,
+  "seq_log_ratio_std": 0.0,
+  "seq_log_ratio_absmax": 0.0,
+  "kl_k3": 0.0,
+  "len_corr": NaN
+}
