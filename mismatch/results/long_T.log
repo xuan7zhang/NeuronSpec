@@ -1,0 +1,12 @@
+2026-09-11T23:19:35+00:00 START sample T=1900 bucket 2048
+2026-09-12T00:32:58+00:00 END sample rc=0 (10 NEFF)
+2026-09-12T00:32:58+00:00 START recompute bucket 2048
+2026-09-12T00:36:07+00:00 END recompute rc=0
+RESULT T=511: T=511, sigma_seq=0.657, ESS/N=0.675, exp(-s^2)=0.649
+RESULT T=868: T=866, sigma_seq=0.911, ESS/N=0.481, exp(-s^2)=0.436
+RESULT T=long: T=1883, sigma_seq=1.173, ESS/N=0.242, exp(-s^2)=0.253
+  预测 sigma(T=511) = 0.657 (由 T=511 外推), 实测 0.657, 偏差 +0.0%
+  预测 sigma(T=866) = 0.855 (由 T=511 外推), 实测 0.911, 偏差 +6.5%
+  预测 sigma(T=1883) = 1.261 (由 T=511 外推), 实测 1.173, 偏差 -7.0%
+  三点幂律拟合 sigma ~ T^0.435  (理论 0.5, iid 误差)
+2026-09-12T00:36:10+00:00 ALL DONE
